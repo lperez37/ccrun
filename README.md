@@ -63,6 +63,7 @@ ccrun [options] < prompt.txt      # prompt read from stdin when no argument
 | `--plugin-dir <dir>` | — | passed to `claude --plugin-dir` when set |
 | `--json` | off | emit a JSON result object on stdout instead of plain text |
 | `--no-skip-permissions` | off | drop `--dangerously-skip-permissions` (will block on prompts) |
+| `--stream` | off | live-stream the REPL pane to stderr as it runs, so you watch everything happen |
 | `--quiet` / `--verbose` | — | stderr diagnostics verbosity |
 | `-h, --help` / `-v, --version` | — | help / version |
 

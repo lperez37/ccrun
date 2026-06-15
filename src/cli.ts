@@ -6,6 +6,11 @@ import { createRequire } from "node:module";
 
 import { makeLogger, type LogLevel } from "./logger.js";
 import { run, type RunResult } from "./run.js";
+import {
+  isTunedVersion,
+  parseClaudeVersion,
+  TUNED_CLAUDE_CODE_VERSION,
+} from "./version.js";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -31,6 +36,7 @@ OPTIONS
   --plugin-dir <dir>   Passed to 'claude --plugin-dir' when set
   --json               Emit a JSON result object on stdout instead of plain text
   --no-skip-permissions  Drop --dangerously-skip-permissions (will block on prompts)
+  --stream             Live-stream the REPL pane to stderr as it runs (watch everything)
   --quiet              Suppress diagnostics on stderr
   --verbose            Verbose diagnostics on stderr
   -h, --help           Show this help
@@ -56,6 +62,7 @@ async function main(): Promise<number> {
         "plugin-dir": { type: "string" },
         json: { type: "boolean", default: false },
         "skip-permissions": { type: "boolean", default: true },
+        stream: { type: "boolean", default: false },
         quiet: { type: "boolean", default: false },
         verbose: { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
@@ -100,13 +107,22 @@ async function main(): Promise<number> {
   const model = MODEL_ALIASES[rawModel] ?? rawModel;
 
   // Preflight: fail fast with an actionable message if the toolchain is missing.
-  const missing = await preflight();
+  const { missing, claudeVersion } = await preflight();
   if (missing.length > 0) {
     process.stderr.write(`ccrun: missing required tool(s): ${missing.join(", ")}.\n`);
     process.stderr.write(
       "Install them and ensure 'claude' is logged in to an interactive subscription.\n",
     );
     return 2;
+  }
+  // Version drift guard: the pane-scraping fallback is tuned to a specific
+  // Claude Code release. Warn (do not block) when the installed version drifts,
+  // since the structured Stop-hook path still works but the fallback may not.
+  if (!isTunedVersion(claudeVersion)) {
+    logger.warn(
+      `claude version ${claudeVersion ?? "unknown"} differs from the tuned target ${TUNED_CLAUDE_CODE_VERSION}; ` +
+        "the pane-scraping completion fallback may be unreliable (the Stop-hook path is unaffected).",
+    );
   }
 
   // Signal handling: a single SIGINT/SIGTERM aborts the run; run() reclaims the
@@ -130,6 +146,7 @@ async function main(): Promise<number> {
       timeoutSeconds,
       pluginDir: values["plugin-dir"],
       skipPermissions: values["skip-permissions"],
+      stream: values.stream,
       signal: controller.signal,
       logger,
     });
@@ -153,22 +170,26 @@ async function main(): Promise<number> {
 }
 
 /**
- * Check that tmux and claude are resolvable on PATH. Returns missing names.
- * We only care whether the binary EXISTS, not whether the probe flag succeeds
- * (tmux uses `-V`, not `--version`), so only ENOENT counts as missing — any
- * other failure means the binary ran.
+ * Check that tmux and claude are resolvable on PATH, and capture the claude
+ * version string. We only care whether the binary EXISTS, not whether the probe
+ * flag succeeds (tmux uses `-V`, not `--version`), so only ENOENT counts as
+ * missing — any other failure means the binary ran.
  */
-async function preflight(): Promise<string[]> {
+async function preflight(): Promise<{ missing: string[]; claudeVersion: string | null }> {
   const missing: string[] = [];
   const probes: Record<string, string> = { tmux: "-V", claude: "--version" };
+  let claudeVersion: string | null = null;
   for (const [bin, flag] of Object.entries(probes)) {
     const present = await execFileAsync(bin, [flag]).then(
-      () => true,
+      ({ stdout }) => {
+        if (bin === "claude") claudeVersion = parseClaudeVersion(stdout);
+        return true;
+      },
       (err: NodeJS.ErrnoException) => err.code !== "ENOENT",
     );
     if (!present) missing.push(bin);
   }
-  return missing;
+  return { missing, claudeVersion };
 }
 
 function readStdin(): Promise<string> {

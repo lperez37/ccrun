@@ -213,6 +213,19 @@ describe("tmux argv construction", () => {
     ]);
   });
 
+  it("pipePaneToFile streams pane output to a single-quoted file via cat >>", async () => {
+    const { exec, calls } = makeStubExec();
+    const t = makeTmux(exec);
+    await t.pipePaneToFile("ccr-owl", "/tmp/ws/stream.log");
+    assert.deepEqual(calls[0].args, [
+      "pipe-pane",
+      "-o",
+      "-t",
+      "ccr-owl",
+      "cat >> '/tmp/ws/stream.log'",
+    ]);
+  });
+
   it("loadBuffer uses a per-session named buffer and a file path", async () => {
     const { exec, calls } = makeStubExec();
     const t = makeTmux(exec);

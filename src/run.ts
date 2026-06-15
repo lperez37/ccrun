@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -73,6 +73,8 @@ export interface RunOptions {
   readonly timeoutSeconds: number;
   readonly pluginDir?: string;
   readonly skipPermissions?: boolean;
+  /** Live-stream the raw REPL pane to stderr as the run progresses. */
+  readonly stream?: boolean;
   /** External cancel (e.g. SIGINT). Composed with the internal timeout. */
   readonly signal?: AbortSignal;
   readonly logger: Logger;
@@ -137,10 +139,22 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     usage: null,
   };
   let failure: string | null = null;
+  const streamer = opts.stream ? new PaneStreamer() : null;
 
   try {
     // 1. Launch the REPL.
     await tmux.newSession(sessionName, workingDir);
+    // --stream: pipe the raw pane to a file and tail it to stderr so the user
+    // watches the whole session live. Set up right after the session exists so
+    // boot output is captured too. Best-effort — never let it fail the run.
+    if (streamer) {
+      const streamFile = path.join(workspace, "stream.log");
+      await writeFile(streamFile, "").catch(() => undefined);
+      await tmux.pipePaneToFile(sessionName, streamFile).catch((e) =>
+        logger.debug("pipe-pane failed; stream disabled", { error: errMsg(e) }),
+      );
+      streamer.start(streamFile);
+    }
     const launchCmd = buildLaunchCommand({
       model: opts.model,
       pluginDir: opts.pluginDir,
@@ -186,6 +200,9 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     await reclaimSession(sessionName, { tmux, logger }).catch((e) =>
       logger.warn("reclaim failed", { sessionName, error: errMsg(e) }),
     );
+    // Flush + stop the live stream before the workspace (holding stream.log) is
+    // removed, so the final frames reach stderr.
+    if (streamer) await streamer.stop();
     await cleanupStopHookArtifacts(artifacts);
     await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
     // The private tmux server auto-exits once its only session is reclaimed, but
@@ -426,6 +443,57 @@ function splitLines(s: string): string[] {
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Tails the pipe-pane output file and writes new bytes to stderr as they appear,
+ * so `--stream` shows the live REPL (ANSI included, so colors render). Polls the
+ * file from a tracked byte offset; reopening each tick keeps it simple and
+ * robust against the file not existing until the first pane output.
+ */
+class PaneStreamer {
+  private offset = 0;
+  private running = false;
+  private loop: Promise<void> | null = null;
+  private file = "";
+
+  start(file: string): void {
+    this.file = file;
+    this.running = true;
+    this.loop = this.run();
+  }
+
+  private async run(): Promise<void> {
+    const buf = Buffer.allocUnsafe(64 * 1024);
+    while (this.running) {
+      await this.drain(buf);
+      await sleep(120).catch(() => undefined);
+    }
+    await this.drain(buf); // final flush after stop
+  }
+
+  private async drain(buf: Buffer): Promise<void> {
+    try {
+      const fh = await open(this.file, "r");
+      try {
+        for (;;) {
+          const { bytesRead } = await fh.read(buf, 0, buf.length, this.offset);
+          if (bytesRead <= 0) break;
+          this.offset += bytesRead;
+          process.stderr.write(Buffer.from(buf.subarray(0, bytesRead)));
+        }
+      } finally {
+        await fh.close();
+      }
+    } catch {
+      // File not created yet (no pane output) — try again next tick.
+    }
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    if (this.loop) await this.loop.catch(() => undefined);
+  }
 }
 
 /**
