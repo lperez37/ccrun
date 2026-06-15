@@ -1,43 +1,30 @@
 # ccrun
 
-Run **one** Claude Code turn and print the result — like `claude -p`, but it drives
-the **interactive** `claude` REPL inside a detached **tmux** session instead of
-print mode. That keeps usage on your Claude **subscription (interactive) pool**
-rather than the metered programmatic/API pool.
+Run one Claude Code turn and print the result. Same idea as `claude -p`, except it drives the interactive `claude` REPL inside a detached tmux session instead of print mode. That is the whole point: it keeps usage on your Claude subscription (the interactive pool) instead of the metered programmatic/API pool.
 
 ```console
 $ ccrun "In one sentence, what is 6 times 7?"
 6 times 7 is 42.
 ```
 
-It's deliberately tiny and single-shot: **no loops, no server, no daemon, no
-database.** One prompt in, the final assistant message out, a clean exit code.
-Wrap it in your own loop (bash, a Ralph loop, CI, whatever) — see
-[Use it in a loop](#use-it-in-a-loop).
+It is deliberately tiny and single-shot. No loops, no server, no daemon, no database. One prompt in, the final assistant message out, a clean exit code. Bring your own loop (bash, a Ralph loop, CI, whatever). See [Use it in a loop](#use-it-in-a-loop).
 
 ## Why
 
-`claude -p "<prompt>"` runs Claude Code in **print mode**, which bills against the
-metered programmatic pool. Driving the interactive REPL instead (no `-p`, with the
-`entrypoint:cli` signature) keeps the work on your subscription. Doing that by hand
-is fiddly — you need a PTY, careful input delivery, and a reliable way to know when
-the turn is done. `ccrun` packages that into a single command with the same
-ergonomics as `claude -p`.
+`claude -p "<prompt>"` runs Claude Code in print mode, which bills against the metered programmatic pool. Drive the interactive REPL instead (no `-p`, with the `entrypoint:cli` signature) and the work stays on your subscription. The problem is that doing this by hand is fiddly. You need a PTY, careful input delivery and a reliable way to know when the turn is actually done. `ccrun` packages all of that into one command with the same ergonomics as `claude -p`.
 
 ## Requirements
 
-`ccrun` itself has **zero runtime npm dependencies** (no native build). It only
-needs these on the host:
+`ccrun` itself has zero runtime npm dependencies and no native build. It only needs these on the host:
 
 | Requirement | Why | Check |
 |-------------|-----|-------|
 | **Node ≥ 22** | ESM + built-in `node:util` arg parsing | `node --version` |
 | **tmux** | the run drives the REPL inside a detached tmux session | `tmux -V` |
 | **`claude` CLI on PATH** | the agent being driven | `claude --version` |
-| **Logged into an interactive subscription** | the whole point — keeps usage off the metered pool | run `claude` once; it should open the REPL, not ask for an API key |
+| **Logged into an interactive subscription** | the whole point, keeps usage off the metered pool | run `claude` once; it should open the REPL, not ask for an API key |
 
-`ccrun` runs a fast preflight on startup and exits with a clear message if `tmux`
-or `claude` is missing.
+`ccrun` runs a fast preflight on startup and exits with a clear message if `tmux` or `claude` is missing.
 
 ## Install
 
@@ -47,10 +34,7 @@ cd ccrun
 bash scripts/install.sh
 ```
 
-`install.sh` builds the project and symlinks `ccrun` into `~/.local/bin`
-(override with `CCRUN_BIN_DIR=/some/dir`). It avoids `npm link`/`npm i -g`, which
-fail on NixOS (read-only nix-store global prefix) and need `sudo` elsewhere. If
-`~/.local/bin` isn't on your `PATH`, the script tells you what to add.
+`install.sh` builds the project and symlinks `ccrun` into `~/.local/bin` (override with `CCRUN_BIN_DIR=/some/dir`). It does not use `npm link`/`npm i -g` on purpose: those fail on NixOS because of the read-only nix-store global prefix, and they need `sudo` elsewhere. If `~/.local/bin` is not on your `PATH`, the script tells you what to add.
 
 <details>
 <summary>Manual install / other options</summary>
@@ -82,11 +66,11 @@ ccrun [options] < prompt.txt      # prompt read from stdin when no argument
 | `--quiet` / `--verbose` | — | stderr diagnostics verbosity |
 | `-h, --help` / `-v, --version` | — | help / version |
 
-**Output contract** (so it composes like `claude -p`):
+Output contract (this is what lets it compose like `claude -p`):
 
-- **stdout** — the final assistant message (clean text), or the JSON object with `--json`.
-- **stderr** — all diagnostics.
-- **exit codes** — `0` success · `1` failure (limit/error/stall) · `2` usage error · `124` timeout · `130` interrupted.
+- **stdout** is the final assistant message (clean text), or the JSON object when you pass `--json`.
+- **stderr** is all diagnostics.
+- **exit codes**: `0` success, `1` failure (limit/error/stall), `2` usage error, `124` timeout, `130` interrupted.
 
 `--json` shape:
 
@@ -96,8 +80,7 @@ ccrun [options] < prompt.txt      # prompt read from stdin when no argument
 
 ## Use it in a loop
 
-`ccrun` is the single-shot primitive; you bring the loop. A minimal Ralph-style
-loop with fresh context each iteration and shared state via git:
+`ccrun` is the single-shot primitive. You bring the loop. Here is a minimal Ralph-style loop, fresh context every iteration and shared state via git:
 
 ```bash
 #!/usr/bin/env bash
@@ -110,43 +93,30 @@ while ! grep -q '^DONE' STATUS 2>/dev/null; do
 done
 ```
 
-Because the output is the clean final message and the exit code is meaningful,
-`ccrun` drops into anywhere you'd have used `claude -p`.
+The output is the clean final message and the exit code means something, so `ccrun` drops in anywhere you were already using `claude -p`.
 
 ## How it works
 
-1. Create a fresh tmux session `ccr-<id>` on a **private tmux socket** (fully
-   isolated from your default tmux — see [Safety](#safety)).
-2. Launch the interactive REPL: `env -u … TERM=xterm-256color claude
-   --dangerously-skip-permissions --model … --settings <stop-hook>`
-   (**never** `-p`, **never** `--max-turns`).
-3. Wait for the input box, then deliver the prompt (short prompts are
-   human-typed; larger ones are bracketed-pasted).
-4. Detect turn completion via a per-run **Stop hook** — Claude writes the turn's
-   final message into the hook payload, which `ccrun` reads directly (same text
-   `claude -p` prints). A pane-scraping watcher + stall watchdog is the fallback.
-5. Print the result, then reclaim the session (graceful `/exit` → `kill-session`
-   → SIGTERM/SIGKILL backstop).
+1. Create a fresh tmux session `ccr-<id>` on a private tmux socket (fully isolated from your default tmux, see [Safety](#safety)).
+2. Launch the interactive REPL: `env -u … TERM=xterm-256color claude --dangerously-skip-permissions --model … --settings <stop-hook>`. Never `-p`, never `--max-turns`.
+3. Wait for the input box, then deliver the prompt. Short prompts are human-typed, larger ones are bracketed-pasted.
+4. Detect turn completion via a per-run Stop hook. Claude writes the turn's final message into the hook payload and `ccrun` reads it directly (same text `claude -p` prints). A pane-scraping watcher plus a stall watchdog is the fallback.
+5. Print the result, then reclaim the session (graceful `/exit`, then `kill-session`, then a SIGTERM/SIGKILL backstop).
 
 ## Safety
 
-- **Private socket per run.** Every run uses its own `tmux -L` server socket, so
-  `ccrun` can never list, capture, or kill any tmux session you own. There is no
-  global reaper and `tmux kill-server` is never called.
-- **One owned session.** The run owns exactly one `ccr-<id>` session and always
-  reclaims it — in a `finally` block, on timeout, and on SIGINT/SIGTERM.
-- **`--dangerously-skip-permissions` is on by default** because the run is
-  autonomous (no human to approve tool calls). Pass `--no-skip-permissions` to
-  require approval — but then the run will block on the first prompt and time out.
+This is the part I care about most, because an interactive REPL never self-terminates and a missed completion would otherwise pin a tmux session forever.
+
+- **Private socket per run.** Every run gets its own `tmux -L` server socket, so `ccrun` cannot list, capture or kill any tmux session you own. There is no global reaper and `tmux kill-server` is never called.
+- **One owned session.** The run owns exactly one `ccr-<id>` session and always reclaims it: in a `finally` block, on timeout and on SIGINT/SIGTERM.
+- **`--dangerously-skip-permissions` is on by default**, because the run is autonomous and there is no human around to approve tool calls. Pass `--no-skip-permissions` if you want approval prompts, but then the run blocks on the first one and times out.
 
 ## Credits
 
-The completion-detection approach (interactive REPL in tmux + a Stop hook for
-turn detection) is shared with [`claude-code-runner-tmux`] and was informed by
-[Finndersen/claude-interactive-sdk](https://github.com/Finndersen/claude-interactive-sdk).
+The completion-detection approach (interactive REPL in tmux plus a Stop hook for turn detection) is shared with [`claude-code-runner-tmux`] and was informed by [Finndersen/claude-interactive-sdk](https://github.com/Finndersen/claude-interactive-sdk).
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT, see [LICENSE](./LICENSE).
 
 [`claude-code-runner-tmux`]: https://github.com/lperez37
