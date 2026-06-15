@@ -1,0 +1,39 @@
+{
+  "name": "claude-tmux-run",
+  "version": "1.0.0",
+  "description": "Run one interactive Claude Code turn inside a detached tmux session — a safe, single-shot `claude -p` replacement that keeps usage on the subscription (interactive) pool.",
+  "type": "module",
+  "bin": {
+    "ccrun": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "tsc && node --test dist/__tests__/*.test.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "tmux",
+    "cli",
+    "agent",
+    "ralph"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
