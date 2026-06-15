@@ -1,5 +1,7 @@
 # ccrun
 
+[![CI](https://github.com/lperez37/ccrun/actions/workflows/ci.yml/badge.svg)](https://github.com/lperez37/ccrun/actions/workflows/ci.yml)
+
 Run one Claude Code turn and print the result. Same idea as `claude -p`, except it drives the interactive `claude` REPL inside a detached tmux session instead of print mode. That is the whole point: it keeps usage on your Claude subscription (the interactive pool) instead of the metered programmatic/API pool.
 
 ```console
@@ -111,6 +113,16 @@ This is the part I care about most, because an interactive REPL never self-termi
 - **Private socket per run.** Every run gets its own `tmux -L` server socket, so `ccrun` cannot list, capture or kill any tmux session you own. There is no global reaper and `tmux kill-server` is never called.
 - **One owned session.** The run owns exactly one `ccr-<id>` session and always reclaims it: in a `finally` block, on timeout and on SIGINT/SIGTERM.
 - **`--dangerously-skip-permissions` is on by default**, because the run is autonomous and there is no human around to approve tool calls. Pass `--no-skip-permissions` if you want approval prompts, but then the run blocks on the first one and times out.
+
+## Reliability
+
+Honest status: solid for your own automation, not yet hardened infra for third parties.
+
+- **Unit tests**: 171, on the brittle core (pane phase detection, human typing, tmux argv, the kill ladder, private-socket isolation, version parsing). They run in CI on Node 22 and 24.
+- **Soak test**: `scripts/soak.sh 50 5` ran 50 instances (5 at a time) and passed 50/50, with zero leftover sockets, sessions or processes. Re-run it yourself: `scripts/soak.sh [runs] [concurrency]`.
+- **The one real risk**: the pane-scraping completion fallback in `idle.ts` is tuned to a specific Claude Code release. The happy path (the Stop hook's `last_assistant_message`) does not depend on it, but the fallback does. `ccrun` parses `claude --version` on startup and warns when the installed version drifts from the tuned target (`src/version.ts`). The warning is non-fatal: the structured path still works.
+
+So: the failure modes are safe (a run fails or times out, never a nuked tmux or orphaned processes), the success rate is high, and the one fragile component warns you when it might be out of date. Wrap it in a loop that checks exit codes and you are fine.
 
 ## Credits
 
