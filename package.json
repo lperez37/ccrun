@@ -1,5 +1,5 @@
 {
-  "name": "claude-tmux-run",
+  "name": "ccrun",
   "version": "1.0.0",
   "description": "Run one interactive Claude Code turn inside a detached tmux session — a safe, single-shot `claude -p` replacement that keeps usage on the subscription (interactive) pool.",
   "type": "module",

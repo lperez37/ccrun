@@ -1,4 +1,4 @@
-# claude-tmux-run (`ccrun`)
+# ccrun
 
 Run **one** Claude Code turn and print the result — like `claude -p`, but it drives
 the **interactive** `claude` REPL inside a detached **tmux** session instead of
@@ -42,8 +42,8 @@ or `claude` is missing.
 ## Install
 
 ```bash
-git clone https://github.com/lperez37/claude-tmux-run.git
-cd claude-tmux-run
+git clone https://github.com/lperez37/ccrun.git
+cd ccrun
 bash scripts/install.sh
 ```
 
@@ -60,7 +60,7 @@ npm ci && npm run build       # produces dist/
 node dist/cli.js --help       # run directly
 
 # or run without installing, straight from GitHub:
-npx github:lperez37/claude-tmux-run -- "your prompt"
+npx github:lperez37/ccrun -- "your prompt"
 ```
 </details>
 
