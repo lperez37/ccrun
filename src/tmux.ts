@@ -134,7 +134,6 @@ export interface Tmux {
   sendEnter(name: string): Promise<void>;
   sendCtrlC(name: string): Promise<void>;
   capturePane(name: string, lines?: number): Promise<string>;
-  pipePaneToFile(name: string, filePath: string): Promise<void>;
   loadBuffer(name: string, filePath: string): Promise<void>;
   pasteBuffer(name: string, bufferName: string): Promise<void>;
   listSessions(prefix: string): Promise<SessionInfo[]>;
@@ -284,19 +283,6 @@ export function makeTmux(exec: Exec, socket?: string): Tmux {
     }
   };
 
-  const pipePaneToFile = async (
-    name: string,
-    filePath: string,
-  ): Promise<void> => {
-    // Stream the pane's raw output (ANSI included) to a file as it is produced.
-    // `cat >> <file>` is run by tmux via /bin/sh, so the path is single-quoted
-    // (no shell metacharacter can escape). Used by `--stream` to tail the live
-    // session to the parent's stderr. The pipe stops automatically when the
-    // session is killed. `-o` makes it a no-op if a pipe is already attached.
-    const quoted = `'${filePath.replace(/'/g, `'\\''`)}'`;
-    await run(["pipe-pane", "-o", "-t", name, `cat >> ${quoted}`]);
-  };
-
   const loadBuffer = async (name: string, filePath: string): Promise<void> => {
     // Per-session named buffer (`-b <name>`) avoids clobbering the user's
     // default tmux paste buffer. The buffer is loaded from a file on disk so
@@ -394,7 +380,6 @@ export function makeTmux(exec: Exec, socket?: string): Tmux {
     sendEnter,
     sendCtrlC,
     capturePane,
-    pipePaneToFile,
     loadBuffer,
     pasteBuffer,
     listSessions,

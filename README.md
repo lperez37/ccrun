@@ -1,7 +1,5 @@
 # ccrun
 
-[![CI](https://github.com/lperez37/ccrun/actions/workflows/ci.yml/badge.svg)](https://github.com/lperez37/ccrun/actions/workflows/ci.yml)
-
 Run one Claude Code turn and print the result. Same idea as `claude -p`, except it drives the interactive `claude` REPL inside a detached tmux session instead of print mode. That is the whole point: it keeps usage on your Claude subscription (the interactive pool) instead of the metered programmatic/API pool.
 
 ```console
@@ -59,14 +57,13 @@ ccrun [options] < prompt.txt      # prompt read from stdin when no argument
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--model <m>` | `claude-sonnet-4-6` | model id or alias (`sonnet`\|`opus`\|`haiku`) |
-| `--cwd <dir>` | current dir | working directory for the run |
-| `--timeout <seconds>` | `1800` | hard cap; on hit the session is killed and exit is `124` |
+| `-m, --model <m>` | `claude-sonnet-4-6` | model id or alias (`sonnet`\|`opus`\|`haiku`) |
+| `-C, --cwd <dir>` | current dir | working directory for the run |
+| `-t, --timeout <secs>` | `1800` | hard cap; on hit the session is killed and exit is `124` |
 | `--plugin-dir <dir>` | — | passed to `claude --plugin-dir` when set |
-| `--json` | off | emit a JSON result object on stdout instead of plain text |
+| `-j, --json` | off | emit a JSON result object on stdout instead of plain text |
 | `--no-skip-permissions` | off | drop `--dangerously-skip-permissions` (will block on prompts) |
-| `--stream` | off | live-stream the REPL pane to stderr as it runs, so you watch everything happen |
-| `--quiet` / `--verbose` | — | stderr diagnostics verbosity |
+| `-q, --quiet` / `--verbose` | — | stderr diagnostics verbosity |
 | `-h, --help` / `-v, --version` | — | help / version |
 
 Output contract (this is what lets it compose like `claude -p`):
@@ -118,7 +115,7 @@ This is the part I care about most, because an interactive REPL never self-termi
 
 Honest status: solid for your own automation, not yet hardened infra for third parties.
 
-- **Unit tests**: 171, on the brittle core (pane phase detection, human typing, tmux argv, the kill ladder, private-socket isolation, version parsing). They run in CI on Node 22 and 24.
+- **Unit tests**: `npm test` runs the suite (170 tests) over the brittle core: pane phase detection, human typing, tmux argv, the kill ladder, private-socket isolation and version parsing.
 - **Soak test**: `scripts/soak.sh 50 5` ran 50 instances (5 at a time) and passed 50/50, with zero leftover sockets, sessions or processes. Re-run it yourself: `scripts/soak.sh [runs] [concurrency]`.
 - **The one real risk**: the pane-scraping completion fallback in `idle.ts` is tuned to a specific Claude Code release. The happy path (the Stop hook's `last_assistant_message`) does not depend on it, but the fallback does. `ccrun` parses `claude --version` on startup and warns when the installed version drifts from the tuned target (`src/version.ts`). The warning is non-fatal: the structured path still works.
 

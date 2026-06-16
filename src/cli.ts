@@ -30,17 +30,16 @@ USAGE
   ccrun [options] < prompt.txt      # prompt read from stdin when no argument
 
 OPTIONS
-  --model <m>          Model id or alias (sonnet|opus|haiku). Default: ${DEFAULT_MODEL}
-  --cwd <dir>          Working directory for the run. Default: current directory
-  --timeout <seconds>  Hard cap on the run. Default: 1800
-  --plugin-dir <dir>   Passed to 'claude --plugin-dir' when set
-  --json               Emit a JSON result object on stdout instead of plain text
-  --no-skip-permissions  Drop --dangerously-skip-permissions (will block on prompts)
-  --stream             Live-stream the REPL pane to stderr as it runs (watch everything)
-  --quiet              Suppress diagnostics on stderr
-  --verbose            Verbose diagnostics on stderr
-  -h, --help           Show this help
-  -v, --version        Show version
+  -m, --model <m>        Model id or alias (sonnet|opus|haiku). Default: ${DEFAULT_MODEL}
+  -C, --cwd <dir>        Working directory for the run. Default: current directory
+  -t, --timeout <secs>   Hard cap on the run. Default: 1800
+      --plugin-dir <dir> Passed to 'claude --plugin-dir' when set
+  -j, --json             Emit a JSON result object on stdout instead of plain text
+      --no-skip-permissions  Drop --dangerously-skip-permissions (will block on prompts)
+  -q, --quiet            Suppress diagnostics on stderr
+      --verbose          Verbose diagnostics on stderr
+  -h, --help             Show this help
+  -v, --version          Show version
 
 OUTPUT
   stdout = the final assistant message (or JSON with --json). stderr = diagnostics.
@@ -56,14 +55,13 @@ async function main(): Promise<number> {
     parsed = parseArgs({
       allowPositionals: true,
       options: {
-        model: { type: "string" },
-        cwd: { type: "string" },
-        timeout: { type: "string" },
+        model: { type: "string", short: "m" },
+        cwd: { type: "string", short: "C" },
+        timeout: { type: "string", short: "t" },
         "plugin-dir": { type: "string" },
-        json: { type: "boolean", default: false },
+        json: { type: "boolean", short: "j", default: false },
         "skip-permissions": { type: "boolean", default: true },
-        stream: { type: "boolean", default: false },
-        quiet: { type: "boolean", default: false },
+        quiet: { type: "boolean", short: "q", default: false },
         verbose: { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
         version: { type: "boolean", short: "v", default: false },
@@ -146,7 +144,6 @@ async function main(): Promise<number> {
       timeoutSeconds,
       pluginDir: values["plugin-dir"],
       skipPermissions: values["skip-permissions"],
-      stream: values.stream,
       signal: controller.signal,
       logger,
     });
