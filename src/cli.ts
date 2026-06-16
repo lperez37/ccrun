@@ -32,7 +32,7 @@ USAGE
 OPTIONS
   -m, --model <m>        Model id or alias (sonnet|opus|haiku). Default: ${DEFAULT_MODEL}
   -C, --cwd <dir>        Working directory for the run. Default: current directory
-  -t, --timeout <secs>   Hard cap on the run. Default: 1800
+  -t, --timeout <secs>   Hard cap on the run. Default: 14400
       --plugin-dir <dir> Passed to 'claude --plugin-dir' when set
   -j, --json             Emit a JSON result object on stdout instead of plain text
       --no-skip-permissions  Drop --dangerously-skip-permissions (will block on prompts)
@@ -95,7 +95,7 @@ async function main(): Promise<number> {
     return 2;
   }
 
-  const timeoutSeconds = values.timeout ? Number(values.timeout) : 1800;
+  const timeoutSeconds = values.timeout ? Number(values.timeout) : 14400;
   if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
     process.stderr.write(`ccrun: invalid --timeout '${values.timeout}'.\n`);
     return 2;

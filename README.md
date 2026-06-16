@@ -59,7 +59,7 @@ ccrun [options] < prompt.txt      # prompt read from stdin when no argument
 |--------|---------|-------------|
 | `-m, --model <m>` | `claude-opus-4-8` | model id or alias (`sonnet`\|`opus`\|`haiku`) |
 | `-C, --cwd <dir>` | current dir | working directory for the run |
-| `-t, --timeout <secs>` | `1800` | hard cap; on hit the session is killed and exit is `124` |
+| `-t, --timeout <secs>` | `14400` | hard cap (4h backstop); on hit the session is killed and exit is `124`. The stall watchdog catches hung/idle sessions much sooner |
 | `--plugin-dir <dir>` | — | passed to `claude --plugin-dir` when set |
 | `-j, --json` | off | emit a JSON result object on stdout instead of plain text |
 | `--no-skip-permissions` | off | drop `--dangerously-skip-permissions` (will block on prompts) |
