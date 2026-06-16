@@ -9,6 +9,8 @@ const STOP_POLL_MS = 150;
 export interface StopHookArtifacts {
   readonly dir: string;
   readonly stopPath: string;
+  /** File the injected statusLine overwrites with Claude's latest cost JSON. */
+  readonly costPath: string;
   readonly settingsPath: string;
   readonly settingsJson: string;
 }
@@ -33,12 +35,14 @@ export async function createStopHookArtifacts(
   const dir = path.join(workspace, ".runner", sessionId);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const stopPath = path.join(dir, "stop.jsonl");
+  const costPath = path.join(dir, "cost.json");
 
   // Start from a clean slate so a leftover file from a previous run can't be
   // mistaken for this run's completion signal.
   await rm(stopPath, { force: true });
+  await rm(costPath, { force: true });
 
-  const settings = buildStopHookSettings(stopPath);
+  const settings = buildStopHookSettings(stopPath, costPath);
   const settingsJson = JSON.stringify(settings);
   // Written to disk and passed to claude as `--settings <path>` (not inline
   // JSON), so the launch command stays short and the model never has a long
@@ -49,11 +53,24 @@ export async function createStopHookArtifacts(
     mode: 0o600,
   });
 
-  return { dir, stopPath, settingsPath, settingsJson };
+  return { dir, stopPath, costPath, settingsPath, settingsJson };
 }
 
-export function buildStopHookSettings(stopPath: string): Record<string, unknown> {
+export function buildStopHookSettings(
+  stopPath: string,
+  costPath: string,
+): Record<string, unknown> {
   return {
+    // Inject our OWN statusLine (overrides the user's for this run) purely to
+    // capture Claude Code's built-in cost: the statusLine command receives a
+    // JSON payload on stdin that includes `cost.total_cost_usd`. We overwrite a
+    // file with the latest payload each render (`cat >` — bounded size, always
+    // the freshest cost) and produce no status text. This is host-agnostic: it
+    // does NOT depend on whatever statusLine the user has configured.
+    statusLine: {
+      type: "command",
+      command: `cat > ${shellQuoteArg(costPath)}`,
+    },
     hooks: {
       Stop: [
         {

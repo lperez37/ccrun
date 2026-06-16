@@ -16,7 +16,10 @@ const execFileAsync = promisify(execFile);
 
 describe("Stop hook artifacts", () => {
   it("builds a fixed Stop command that shell-quotes the stop path", () => {
-    const settings = buildStopHookSettings("/tmp/path with ' quote/stop.jsonl");
+    const settings = buildStopHookSettings(
+      "/tmp/path with ' quote/stop.jsonl",
+      "/tmp/path with ' quote/cost.json",
+    );
     const hooks = (settings.hooks as Record<string, unknown>).Stop as Array<{
       hooks: Array<{ type: string; command: string }>;
     }>;
@@ -24,6 +27,13 @@ describe("Stop hook artifacts", () => {
     assert.equal(
       hooks[0].hooks[0].command,
       "cat >> '/tmp/path with '" + '"' + "'" + '"' + "' quote/stop.jsonl'",
+    );
+    // The injected statusLine overwrites the cost file (shell-quoted path).
+    const statusLine = settings.statusLine as { type: string; command: string };
+    assert.equal(statusLine.type, "command");
+    assert.equal(
+      statusLine.command,
+      "cat > '/tmp/path with '" + '"' + "'" + '"' + "' quote/cost.json'",
     );
   });
 
@@ -86,6 +96,7 @@ describe("waitForStopHook", () => {
     await cleanupStopHookArtifacts({
       dir: path.dirname(stopPath),
       stopPath,
+      costPath: path.join(path.dirname(stopPath), "cost.json"),
       settingsPath: "",
       settingsJson: "",
     });

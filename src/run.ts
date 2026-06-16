@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -38,7 +38,7 @@ import {
   waitForStopHook,
 } from "./stop-hook.js";
 import { waitForTranscriptCompletion } from "./transcript.js";
-import { parseSessionCostUsd } from "./session-cost.js";
+import { parseCostPayload } from "./session-cost.js";
 import { StallWatchdog } from "./stall.js";
 
 const execFileAsync = promisify(execFile);
@@ -65,11 +65,11 @@ const TRUST_CONFIRM_SETTLE_MS = 750;
 /** Max bytes of harvested text kept as the result. */
 const RESULT_MAX = 200_000;
 /**
- * How long to wait for Claude Code to render the turn cost in its status footer.
- * It reads `$0.0000` for a beat after the Stop hook fires, then updates; we poll
- * (session still alive) until a non-zero cost appears or this elapses.
+ * How long to wait for Claude Code to report a non-zero cost via the injected
+ * statusLine payload. It reads $0 for a beat after the Stop hook, then updates;
+ * we poll (session still alive) until a non-zero cost appears or this elapses.
  */
-const COST_FOOTER_WAIT_MS = num(process.env.COST_FOOTER_WAIT_MS, 6000);
+const COST_WAIT_MS = num(process.env.CCRUN_COST_WAIT_MS, 6000);
 
 export type RunStatus = "succeeded" | "failed" | "timed_out" | "canceled";
 
@@ -144,15 +144,11 @@ export async function run(opts: RunOptions): Promise<RunResult> {
   const claudeSessionId = sessionName; // used only for artifact naming / fallback
   const artifacts = await createStopHookArtifacts(workspace, claudeSessionId);
 
-  let harvested: {
-    result: string;
-    usage: Record<string, number> | null;
-    costUsd: number | null;
-  } = {
+  let harvested: { result: string; usage: Record<string, number> | null } = {
     result: "",
     usage: null,
-    costUsd: null,
   };
+  let costUsd: number | null = null;
   let failure: string | null = null;
 
   try {
@@ -193,8 +189,10 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     );
     failure = completion.failure;
 
-    // 4. Harvest.
-    harvested = await harvest(sessionName, tmux, completion, signal);
+    // 4. Harvest the result, then read the session cost (session still alive,
+    //    so the injected statusLine file holds Claude's latest cost payload).
+    harvested = await harvest(sessionName, tmux, completion);
+    costUsd = await readSessionCost(artifacts.costPath, signal).catch(() => null);
   } catch (err) {
     failure = abortReason(signal) ?? errMsg(err);
   } finally {
@@ -220,7 +218,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     changedFiles,
     sessionName,
     usage: harvested.usage,
-    costUsd: harvested.costUsd,
+    costUsd,
     error: failure ?? undefined,
   };
 }
@@ -401,27 +399,40 @@ async function harvest(
   session: string,
   tmux: Tmux,
   completion: Completion,
-  signal: AbortSignal,
-): Promise<{ result: string; usage: Record<string, number> | null; costUsd: number | null }> {
-  // Poll the footer briefly for the cost: it reads $0.0000 right after the Stop
-  // hook, then Claude fills it in. Take the first non-zero reading; keep the
-  // last pane for the fallback scrape. The session is still alive here.
-  let pane = await tmux.capturePane(session);
-  let costUsd = parseSessionCostUsd(pane);
-  const deadline = Date.now() + COST_FOOTER_WAIT_MS;
-  while ((costUsd === null || costUsd === 0) && Date.now() < deadline) {
-    try {
-      await sleep(400, signal);
-    } catch {
-      break; // canceled/timed out — stop waiting on cost
-    }
-    pane = await tmux.capturePane(session);
-    costUsd = parseSessionCostUsd(pane);
-  }
+): Promise<{ result: string; usage: Record<string, number> | null }> {
   if (completion.text && completion.text.trim().length > 0) {
-    return { result: completion.text, usage: completion.usage, costUsd };
+    return { result: completion.text, usage: completion.usage };
   }
-  return { result: stripShellStartup(cleanPaneForLog(pane)), usage: completion.usage, costUsd };
+  const pane = await tmux.capturePane(session);
+  return { result: stripShellStartup(cleanPaneForLog(pane)), usage: completion.usage };
+}
+
+/**
+ * Read the session cost from the file ccrun's injected statusLine overwrites
+ * with Claude Code's cost payload. The payload's cost reads $0 for a beat after
+ * the turn, so poll (the session is still alive) until a non-zero cost appears
+ * or the wait elapses. Best-effort: never throws; returns null if unavailable.
+ */
+async function readSessionCost(costPath: string, signal: AbortSignal): Promise<number | null> {
+  const deadline = Date.now() + COST_WAIT_MS;
+  let cost: number | null = null;
+  for (;;) {
+    const raw = await readFile(costPath, "utf-8").catch(() => null);
+    if (raw !== null) {
+      const parsed = parseCostPayload(raw);
+      if (parsed !== null) {
+        cost = parsed;
+        if (parsed > 0) break;
+      }
+    }
+    if (Date.now() >= deadline) break;
+    try {
+      await sleep(300, signal);
+    } catch {
+      break; // canceled/timed out
+    }
+  }
+  return cost;
 }
 
 /** git diff (tracked) + untracked files in the working dir, if it is a repo. */

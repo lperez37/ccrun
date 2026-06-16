@@ -88,9 +88,9 @@ $ ccrun "refactor the auth module"
 ccrun: ~$0.0820 session cost (est. API-equivalent — subscription, not billed)
 ```
 
-The figure is read straight from Claude Code's own REPL status footer (the `$…` it shows next to the token count) — so it's Claude's own number, includes any sub-agents the turn spawned, and needs no price table or external tool. It's surfaced as `costUsd` in `--json`. The cost line goes to **stderr**, so stdout stays the clean message and ccrun keeps composing like `claude -p`. `costUsd` is `null` when the footer shows no cost (e.g. the cost display is off), and `-q/--quiet` suppresses the line.
+The figure is Claude Code's own cost number (it includes any sub-agents the turn spawned) and needs no price table or external tool. ccrun gets it portably: the `--settings` file it already injects for the Stop hook also registers its **own** `statusLine` command, which Claude calls with a JSON payload containing `cost.total_cost_usd`. ccrun's statusLine writes that payload to a private file and reads the cost from it — so this does **not** depend on whatever statusLine you have configured, and works on any machine. It's surfaced as `costUsd` in `--json`. The cost line goes to **stderr**, so stdout stays the clean message and ccrun keeps composing like `claude -p`. `costUsd` is `null` when no cost is reported, and `-q/--quiet` suppresses the line.
 
-Because ccrun runs on the interactive **subscription** pool, this is an *estimated API-equivalent* cost — what the turn would cost on the metered API — not a charge you actually incur. ccrun waits up to a few seconds (`COST_FOOTER_WAIT_MS`, default 6000) for Claude to render the cost before returning.
+Because ccrun runs on the interactive **subscription** pool, this is an *estimated API-equivalent* cost — what the turn would cost on the metered API — not a charge you actually incur. ccrun waits up to a few seconds (`CCRUN_COST_WAIT_MS`, default 6000) for Claude to report a non-zero cost before returning.
 
 ## Use it in a loop
 
