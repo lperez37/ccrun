@@ -57,7 +57,7 @@ ccrun [options] < prompt.txt      # prompt read from stdin when no argument
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-m, --model <m>` | `claude-sonnet-4-6` | model id or alias (`sonnet`\|`opus`\|`haiku`) |
+| `-m, --model <m>` | `claude-opus-4-8` | model id or alias (`sonnet`\|`opus`\|`haiku`) |
 | `-C, --cwd <dir>` | current dir | working directory for the run |
 | `-t, --timeout <secs>` | `1800` | hard cap; on hit the session is killed and exit is `124` |
 | `--plugin-dir <dir>` | — | passed to `claude --plugin-dir` when set |

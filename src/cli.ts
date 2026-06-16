@@ -16,7 +16,7 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
+const DEFAULT_MODEL = "claude-opus-4-8";
 const MODEL_ALIASES: Record<string, string> = {
   sonnet: "claude-sonnet-4-6",
   opus: "claude-opus-4-8",
