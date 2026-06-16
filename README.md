@@ -95,6 +95,8 @@ done
 
 The output is the clean final message and the exit code means something, so `ccrun` drops in anywhere you were already using `claude -p`.
 
+You do not have to hand-roll the loop, though. `ccrun` is now a first-class engine in [ralph-loop](https://github.com/lperez37/ralph-loop): pass `--engine ccrun` and the loop runs each iteration through `ccrun` instead of `claude -p`, so the iterations land on your subscription. The contract is identical (`stdin → final message on stdout → meaningful exit code`), which is exactly why ralph-loop's completion-promise detection and circuit breaker keep working unchanged.
+
 ## How it works
 
 1. Create a fresh tmux session `ccr-<id>` on a private tmux socket (fully isolated from your default tmux, see [Safety](#safety)).
@@ -117,9 +119,12 @@ Honest status: solid for your own automation, not yet hardened infra for third p
 
 - **Unit tests**: `npm test` runs the suite (170 tests) over the brittle core: pane phase detection, human typing, tmux argv, the kill ladder, private-socket isolation and version parsing.
 - **Soak test**: `scripts/soak.sh 50 5` ran 50 instances (5 at a time) and passed 50/50, with zero leftover sockets, sessions or processes. Re-run it yourself: `scripts/soak.sh [runs] [concurrency]`.
+- **AFK Ralph validation**: I wired `ccrun` in as a ralph-loop engine (`--engine ccrun`) and let it build four real apps fully unattended — three vanilla-JS browser games (Snake, 2048, Tetris) with pure logic modules tested via `node:test`, and a Python todo CLI tested via stdlib `unittest`. No third-party deps on purpose, so it exercises `ccrun`, not npm or pip. The four ran sequentially and completely AFK, ~6–8 min each, ~26 min total. Every loop exited by emitting its genuine completion promise (`BUILD SUCCEEDS AND ALL TESTS PASS`) — none hit the iteration cap, 0 stalls, 0 circuit-breaker trips, exit 0 each. I re-verified afterward: builds clean, tests green (7, 12, 7 and 14 tests). And **0 leftover tmux sockets, sessions or processes** after the whole run — the per-run private-socket isolation held across all 12 unattended iterations. With no human around, the driven agent was resourceful in the right way: it fixed a broken build script on its own and, when a `make` binary wasn't installed, ran the underlying commands directly — and only emitted the promise once the work actually passed.
 - **The one real risk**: the pane-scraping completion fallback in `idle.ts` is tuned to a specific Claude Code release. The happy path (the Stop hook's `last_assistant_message`) does not depend on it, but the fallback does. `ccrun` parses `claude --version` on startup and warns when the installed version drifts from the tuned target (`src/version.ts`). The warning is non-fatal: the structured path still works.
 
 So: the failure modes are safe (a run fails or times out, never a nuked tmux or orphaned processes), the success rate is high, and the one fragile component warns you when it might be out of date. Wrap it in a loop that checks exit codes and you are fine.
+
+The honest trade-off versus `claude -p`: per iteration you only get the **final assistant message**. There is no `--output-format stream-json` equivalent, so you lose the full tool-call audit trail — you cannot replay exactly what the agent did mid-turn. For a loop that does not matter much in practice (the completion promise and git history tell you what happened), but if you need the per-tool stream for compliance or debugging, `claude -p` is still the tool for that. What you get in return is that the work stays on your subscription and the run cleans up after itself. For driving a loop, that is the trade I want.
 
 ## Credits
 
