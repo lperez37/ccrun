@@ -69,14 +69,28 @@ ccrun [options] < prompt.txt      # prompt read from stdin when no argument
 Output contract (this is what lets it compose like `claude -p`):
 
 - **stdout** is the final assistant message (clean text), or the JSON object when you pass `--json`.
-- **stderr** is all diagnostics.
+- **stderr** is all diagnostics, including a one-line **session cost** after the run (see below).
 - **exit codes**: `0` success, `1` failure (limit/error/stall), `2` usage error, `124` timeout, `130` interrupted.
 
 `--json` shape:
 
 ```json
-{ "status": "succeeded", "exitCode": 0, "result": "...", "changedFiles": ["a.txt"], "sessionName": "ccr-1a2b3c4d", "usage": null }
+{ "status": "succeeded", "exitCode": 0, "result": "...", "changedFiles": ["a.txt"], "sessionName": "ccr-1a2b3c4d", "usage": null, "costUsd": 0.082 }
 ```
+
+### Session cost
+
+After the run, ccrun prints the session's cost on **stderr**, right next to the final text:
+
+```console
+$ ccrun "refactor the auth module"
+<the final assistant message on stdout>
+ccrun: ~$0.0820 session cost (est. API-equivalent — subscription, not billed)
+```
+
+The figure is read straight from Claude Code's own REPL status footer (the `$…` it shows next to the token count) — so it's Claude's own number, includes any sub-agents the turn spawned, and needs no price table or external tool. It's surfaced as `costUsd` in `--json`. The cost line goes to **stderr**, so stdout stays the clean message and ccrun keeps composing like `claude -p`. `costUsd` is `null` when the footer shows no cost (e.g. the cost display is off), and `-q/--quiet` suppresses the line.
+
+Because ccrun runs on the interactive **subscription** pool, this is an *estimated API-equivalent* cost — what the turn would cost on the metered API — not a charge you actually incur. ccrun waits up to a few seconds (`COST_FOOTER_WAIT_MS`, default 6000) for Claude to render the cost before returning.
 
 ## Use it in a loop
 

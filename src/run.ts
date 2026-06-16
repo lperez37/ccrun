@@ -38,6 +38,7 @@ import {
   waitForStopHook,
 } from "./stop-hook.js";
 import { waitForTranscriptCompletion } from "./transcript.js";
+import { parseSessionCostUsd } from "./session-cost.js";
 import { StallWatchdog } from "./stall.js";
 
 const execFileAsync = promisify(execFile);
@@ -63,6 +64,12 @@ const PASTE_SETTLE_MS = 1500;
 const TRUST_CONFIRM_SETTLE_MS = 750;
 /** Max bytes of harvested text kept as the result. */
 const RESULT_MAX = 200_000;
+/**
+ * How long to wait for Claude Code to render the turn cost in its status footer.
+ * It reads `$0.0000` for a beat after the Stop hook fires, then updates; we poll
+ * (session still alive) until a non-zero cost appears or this elapses.
+ */
+const COST_FOOTER_WAIT_MS = num(process.env.COST_FOOTER_WAIT_MS, 6000);
 
 export type RunStatus = "succeeded" | "failed" | "timed_out" | "canceled";
 
@@ -90,6 +97,11 @@ export interface RunResult {
   readonly changedFiles: readonly string[];
   readonly sessionName: string;
   readonly usage: Record<string, number> | null;
+  /**
+   * Estimated API-equivalent USD cost from Claude Code's status footer, or null
+   * if not shown. ccrun runs on the subscription pool, so it is not billed.
+   */
+  readonly costUsd: number | null;
   /** Failure reason when status !== succeeded. */
   readonly error?: string;
 }
@@ -132,9 +144,14 @@ export async function run(opts: RunOptions): Promise<RunResult> {
   const claudeSessionId = sessionName; // used only for artifact naming / fallback
   const artifacts = await createStopHookArtifacts(workspace, claudeSessionId);
 
-  let harvested: { result: string; usage: Record<string, number> | null } = {
+  let harvested: {
+    result: string;
+    usage: Record<string, number> | null;
+    costUsd: number | null;
+  } = {
     result: "",
     usage: null,
+    costUsd: null,
   };
   let failure: string | null = null;
 
@@ -177,7 +194,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     failure = completion.failure;
 
     // 4. Harvest.
-    harvested = await harvest(sessionName, tmux, completion);
+    harvested = await harvest(sessionName, tmux, completion, signal);
   } catch (err) {
     failure = abortReason(signal) ?? errMsg(err);
   } finally {
@@ -203,6 +220,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     changedFiles,
     sessionName,
     usage: harvested.usage,
+    costUsd: harvested.costUsd,
     error: failure ?? undefined,
   };
 }
@@ -370,21 +388,40 @@ async function pollUntilComplete(
 }
 
 /**
- * Build the result text + usage. Prefer the clean structured message (from the
- * Stop payload / transcript); fall back to a shell-startup-stripped pane scrape
- * only when the structured signal lost the race (e.g. pane polling completed
- * first). The structured text is what makes stdout match `claude -p`.
+ * Build the result text + usage + cost. Prefer the clean structured message
+ * (from the Stop payload / transcript); fall back to a shell-startup-stripped
+ * pane scrape only when the structured signal lost the race. The structured
+ * text is what makes stdout match `claude -p`.
+ *
+ * The pane is captured either way to read the cost from Claude Code's status
+ * footer (`… │ $0.082 │ … N tokens`) — the session is still alive here, so the
+ * footer carries the final running cost.
  */
 async function harvest(
   session: string,
   tmux: Tmux,
   completion: Completion,
-): Promise<{ result: string; usage: Record<string, number> | null }> {
-  if (completion.text && completion.text.trim().length > 0) {
-    return { result: completion.text, usage: completion.usage };
+  signal: AbortSignal,
+): Promise<{ result: string; usage: Record<string, number> | null; costUsd: number | null }> {
+  // Poll the footer briefly for the cost: it reads $0.0000 right after the Stop
+  // hook, then Claude fills it in. Take the first non-zero reading; keep the
+  // last pane for the fallback scrape. The session is still alive here.
+  let pane = await tmux.capturePane(session);
+  let costUsd = parseSessionCostUsd(pane);
+  const deadline = Date.now() + COST_FOOTER_WAIT_MS;
+  while ((costUsd === null || costUsd === 0) && Date.now() < deadline) {
+    try {
+      await sleep(400, signal);
+    } catch {
+      break; // canceled/timed out — stop waiting on cost
+    }
+    pane = await tmux.capturePane(session);
+    costUsd = parseSessionCostUsd(pane);
   }
-  const pane = await tmux.capturePane(session);
-  return { result: stripShellStartup(cleanPaneForLog(pane)), usage: completion.usage };
+  if (completion.text && completion.text.trim().length > 0) {
+    return { result: completion.text, usage: completion.usage, costUsd };
+  }
+  return { result: stripShellStartup(cleanPaneForLog(pane)), usage: completion.usage, costUsd };
 }
 
 /** git diff (tracked) + untracked files in the working dir, if it is a repo. */

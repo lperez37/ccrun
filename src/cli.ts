@@ -157,6 +157,13 @@ async function main(): Promise<number> {
   } else {
     process.stdout.write(result.result);
     if (!result.result.endsWith("\n")) process.stdout.write("\n");
+    // Session cost on STDERR so stdout stays the clean final message (drop-in
+    // for `claude -p`); in a terminal it prints right next to the output.
+    if (result.costUsd !== null && !values.quiet) {
+      const usd = result.costUsd;
+      const amount = usd >= 0.1 ? usd.toFixed(2) : usd.toFixed(4);
+      process.stderr.write(`ccrun: ~$${amount} session cost (est. API-equivalent — subscription, not billed)\n`);
+    }
     if (result.status !== "succeeded") {
       process.stderr.write(`ccrun: run ${result.status}${result.error ? `: ${result.error}` : ""}\n`);
     }
