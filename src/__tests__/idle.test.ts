@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   stripAnsi,
   stripShellStartup,
+  describeLimit,
   detectPhase,
   signature,
   CompletionTracker,
@@ -72,13 +73,17 @@ const PANES = {
   rateLimit: "rate limit exceeded; retry after 60s",
   error: ["API Error: 500 overloaded_error", MODE_LINE].join("\n"),
   connErr: ["Connection error: stream interrupted", MODE_LINE].join("\n"),
-  // Benign tool output that USED to false-positive as an error: a `git log`
-  // result printing `fatal:` and `Error:` inside a tool-result block while the
-  // model is still working. Must NOT classify as error.
+  // Benign tool output that USED to false-positive as a terminal failure while
+  // the model is still working. Must NOT classify as error/limit.
   toolFatalWhileWorking: [
     "● Bash(git log --oneline)",
     "  ⎿  Error: Exit code 128",
     "     fatal: your current branch 'main' does not have any commits yet",
+    "* Hashing… (19s · thinking with high effort)",
+  ].join("\n"),
+  toolLimitWhileWorking: [
+    "● Bash(curl https://docs.example.invalid)",
+    "  ⎿  This page mentions a rate limit of 10 requests per minute.",
     "* Hashing… (19s · thinking with high effort)",
   ].join("\n"),
 } as const;
@@ -175,6 +180,10 @@ describe("detectPhase — each phase from 2.1.177 ground-truth snippets", () => 
     assert.equal(detectPhase(PANES.rateLimit), "limit");
   });
 
+  it("detects context/session-size limit text separately from usage quota", () => {
+    assert.equal(detectPhase("context window limit reached"), "limit");
+  });
+
   it("detects error from 'API Error:'", () => {
     assert.equal(detectPhase(PANES.error), "error");
   });
@@ -183,12 +192,12 @@ describe("detectPhase — each phase from 2.1.177 ground-truth snippets", () => 
     assert.equal(detectPhase(PANES.connErr), "error");
   });
 
-  it("does NOT false-positive on 'fatal:'/'Error:' in tool output while working", () => {
-    // REGRESSION: a `git log` result containing `fatal:`/`Error:` printed in a
-    // tool-result block, with the model still working (`…(19s)` spinner live),
-    // must classify as working — NOT a terminal REPL error. This previously
-    // killed a live ralph iteration mid-think.
+  it("does NOT false-positive on failure-looking tool output while working", () => {
+    // REGRESSION: tool-result text printed while the model is still working
+    // (`…(19s)` spinner live) must classify as working, not as a terminal REPL
+    // failure. This previously killed live ralph iterations mid-think.
     assert.equal(detectPhase(PANES.toolFatalWhileWorking), "working");
+    assert.equal(detectPhase(PANES.toolLimitWhileWorking), "working");
   });
 
   it("detects phase through ANSI noise", () => {
@@ -197,7 +206,7 @@ describe("detectPhase — each phase from 2.1.177 ground-truth snippets", () => 
   });
 });
 
-describe("detectPhase — priority order limit > error > working > idle > booting", () => {
+describe("detectPhase — priority order working > limit > error > idle > booting", () => {
   it("a live working counter co-present with the idle box resolves to working", () => {
     const both = [
       "✻ generating… (3s)",
@@ -210,9 +219,9 @@ describe("detectPhase — priority order limit > error > working > idle > bootin
     assert.equal(detectPhase(both), "working");
   });
 
-  it("limit beats a co-present working signal", () => {
+  it("working beats a co-present limit-looking line", () => {
     const both = "✻ working… (1s) — usage limit reached";
-    assert.equal(detectPhase(both), "limit");
+    assert.equal(detectPhase(both), "working");
   });
 
   it("a LIVE working spinner beats a co-present error line (error is tool output)", () => {
@@ -235,6 +244,34 @@ describe("detectPhase — priority order limit > error > working > idle > bootin
 
   it("idle beats booting when the box is present", () => {
     assert.equal(detectPhase(PANES.idle), "idle");
+  });
+});
+
+describe("describeLimit", () => {
+  it("returns kind, pattern, line, and a bounded excerpt", () => {
+    const pane = [
+      "line 1",
+      "line 2",
+      "You've reached your usage limit for this 5-hour block.",
+      "line 4",
+      "line 5",
+    ].join("\n");
+    const match = describeLimit(pane, 1);
+    assert.deepEqual(match?.kind, "usage");
+    assert.equal(match?.line, 3);
+    assert.match(match?.pattern ?? "", /usage limit/);
+    assert.equal(
+      match?.excerpt,
+      ["line 2", "You've reached your usage limit for this 5-hour block.", "line 4"].join("\n"),
+    );
+  });
+
+  it("classifies context/session-size limit text as context", () => {
+    assert.equal(describeLimit("Claude Code context window limit reached")?.kind, "context");
+  });
+
+  it("returns null when there is no limit text", () => {
+    assert.equal(describeLimit("all good"), null);
   });
 });
 

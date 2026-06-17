@@ -27,10 +27,12 @@ import type { KeystrokeProducer } from "./tmux.js";
 import {
   cleanPaneForLog,
   CompletionTracker,
+  describeLimit,
   detectPhase,
   isTrustDialog,
   signature,
   stripShellStartup,
+  type LimitKind,
 } from "./idle.js";
 import {
   cleanupStopHookArtifacts,
@@ -104,6 +106,9 @@ export interface RunResult {
   readonly costUsd: number | null;
   /** Failure reason when status !== succeeded. */
   readonly error?: string;
+  readonly limit_kind?: LimitKind;
+  readonly limit_pattern?: string;
+  readonly limit_excerpt?: string;
 }
 
 /**
@@ -150,6 +155,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
   };
   let costUsd: number | null = null;
   let failure: string | null = null;
+  let failureDetails: FailureDetails | null = null;
 
   try {
     // 1. Launch the REPL.
@@ -188,6 +194,7 @@ export async function run(opts: RunOptions): Promise<RunResult> {
       logger,
     );
     failure = completion.failure;
+    failureDetails = completion.failureDetails;
 
     // 4. Harvest the result, then read the session cost (session still alive,
     //    so the injected statusLine file holds Claude's latest cost payload).
@@ -220,6 +227,9 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     usage: harvested.usage,
     costUsd,
     error: failure ?? undefined,
+    limit_kind: failureDetails?.kind,
+    limit_pattern: failureDetails?.pattern,
+    limit_excerpt: failureDetails?.excerpt,
   };
 }
 
@@ -280,9 +290,16 @@ async function deliverPrompt(
 
 interface Completion {
   readonly failure: string | null;
+  readonly failureDetails: FailureDetails | null;
   /** Clean final assistant text (from the Stop payload or transcript), if any. */
   readonly text: string | null;
   readonly usage: Record<string, number> | null;
+}
+
+interface FailureDetails {
+  readonly kind: LimitKind;
+  readonly pattern: string;
+  readonly excerpt: string;
 }
 
 /** Race the structured Stop/transcript signal against pane polling. */
@@ -316,7 +333,7 @@ async function waitForTurnCompletion(
         : "";
     if (last.trim().length > 0) {
       logger.debug("structured completion via last_assistant_message", { session });
-      return { failure: null, text: last, usage: null };
+      return { failure: null, failureDetails: null, text: last, usage: null };
     }
     // Fallback: parse the transcript file if the payload lacked the message.
     const transcript = await waitForTranscriptCompletion(
@@ -328,7 +345,12 @@ async function waitForTurnCompletion(
       session,
       stopReason: transcript.stopReason,
     });
-    return { failure: null, text: transcript.text, usage: transcript.usage };
+    return {
+      failure: null,
+      failureDetails: null,
+      text: transcript.text,
+      usage: transcript.usage,
+    };
   })();
 
   const pane = pollUntilComplete(
@@ -338,7 +360,12 @@ async function waitForTurnCompletion(
     tmux,
     paneController.signal,
     logger,
-  ).then((failure): Completion => ({ failure, text: null, usage: null }));
+  ).then((failure): Completion => ({
+    failure: failure.reason,
+    failureDetails: failure.details,
+    text: null,
+    usage: null,
+  }));
 
   try {
     return await Promise.race([structured, pane]);
@@ -364,7 +391,7 @@ async function pollUntilComplete(
   tmux: Tmux,
   signal: AbortSignal,
   logger: Logger,
-): Promise<string | null> {
+): Promise<{ reason: string | null; details: FailureDetails | null }> {
   const tracker = new CompletionTracker(baseline, submitMs);
   const watchdog = new StallWatchdog({ stallMs: STALL_MS });
   for (;;) {
@@ -373,14 +400,36 @@ async function pollUntilComplete(
     const phase = detectPhase(pane);
     const sig = signature(pane);
     const result = tracker.observe({ phase, signature: sig, nowMs: Date.now() });
-    if (result.failure) return result.failure;
-    if (result.complete) return null;
+    if (result.failure) {
+      if (result.failure === "limit") {
+        const match = describeLimit(pane);
+        if (match) {
+          logger.warn("limit phase detected", {
+            session,
+            kind: match.kind,
+            pattern: match.pattern,
+            line: match.line,
+            excerpt: match.excerpt,
+          });
+          return {
+            reason: `limit (${match.kind})`,
+            details: {
+              kind: match.kind,
+              pattern: match.pattern,
+              excerpt: match.excerpt,
+            },
+          };
+        }
+      }
+      return { reason: result.failure, details: null };
+    }
+    if (result.complete) return { reason: null, details: null };
     if (watchdog.observe(sig, phase)) {
       logger.warn("run stalled — watchdog fired", {
         session,
         stableForMs: watchdog.stableForMs(),
       });
-      return "stalled";
+      return { reason: "stalled", details: null };
     }
   }
 }

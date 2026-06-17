@@ -22,6 +22,14 @@ import { createHash } from "node:crypto";
  * - `limit`    — a usage/rate-limit string is visible.
  */
 export type Phase = "booting" | "working" | "idle" | "error" | "limit";
+export type LimitKind = "usage" | "rate" | "context" | "unknown";
+
+export interface LimitMatch {
+  readonly kind: LimitKind;
+  readonly pattern: string;
+  readonly line: number;
+  readonly excerpt: string;
+}
 
 /**
  * Strip ANSI / CSI escape sequences (colors, cursor moves, OSC, etc.) from a
@@ -85,13 +93,18 @@ export function stripAnsi(s: string): string {
  */
 const SPINNER_GLYPHS = /[*·✢✶✻✽]/;
 
-/** Usage / rate-limit indicators. Highest priority — overrides everything. */
-export const LIMIT_PATTERNS: readonly RegExp[] = [
-  /usage limit/i,
-  /rate limit/i,
-  /approaching your .* limit/i,
-  /you've reached your .* limit/i,
+/** Usage / rate-limit indicators surfaced by the REPL. */
+const LIMIT_MATCHERS: readonly { kind: LimitKind; pattern: RegExp }[] = [
+  { kind: "usage", pattern: /usage limit/i },
+  { kind: "rate", pattern: /rate limit/i },
+  { kind: "context", pattern: /context (?:window|limit)/i },
+  { kind: "context", pattern: /(?:token|session).{0,40}limit/i },
+  { kind: "unknown", pattern: /approaching your .* limit/i },
+  { kind: "unknown", pattern: /you've reached your .* limit/i },
 ];
+export const LIMIT_PATTERNS: readonly RegExp[] = LIMIT_MATCHERS.map(
+  ({ pattern }) => pattern,
+);
 
 /**
  * Hard error indicators surfaced by the REPL ITSELF (claude's own error chrome),
@@ -206,6 +219,25 @@ function anyMatch(patterns: readonly RegExp[], text: string): boolean {
   return patterns.some((re) => re.test(text));
 }
 
+export function describeLimit(pane: string, contextLines = 20): LimitMatch | null {
+  const text = stripAnsi(pane);
+  for (const { kind, pattern } of LIMIT_MATCHERS) {
+    const match = pattern.exec(text);
+    if (!match) continue;
+    const lines = text.split("\n");
+    const lineIndex = text.slice(0, match.index).split("\n").length - 1;
+    const before = Math.max(0, lineIndex - contextLines);
+    const after = Math.min(lines.length, lineIndex + contextLines + 1);
+    return {
+      kind,
+      pattern: pattern.toString(),
+      line: lineIndex + 1,
+      excerpt: lines.slice(before, after).join("\n"),
+    };
+  }
+  return null;
+}
+
 /**
  * Whether the captured pane is the trust / permission dialog that blocks boot.
  * waitForBoot uses this to auto-confirm before expecting the idle box.
@@ -217,21 +249,22 @@ export function isTrustDialog(pane: string): boolean {
 /**
  * Classify a single pane capture into a {@link Phase}.
  *
- * Priority order (PLAN.md §6): limit > error > working > idle > booting.
+ * Priority order (PLAN.md §6, tuned): working > limit > error > idle > booting.
  * The pane is ANSI-stripped first. A pane showing BOTH a working signal and the
- * idle prompt resolves to `working` (the model is mid-turn; the box is stale).
+ * a failure-looking line resolves to `working`: while the spinner is live, that
+ * line can be arbitrary tool/page scrollback rather than terminal REPL chrome.
  */
 export function detectPhase(pane: string): Phase {
   const text = stripAnsi(pane);
-  if (anyMatch(LIMIT_PATTERNS, text)) return "limit";
   // A live working spinner (`…(Ns)`) means the model is mid-turn: any
-  // error-looking text in the scrollback is TOOL OUTPUT, not a terminal REPL
-  // failure (a real API error halts the spinner). Working therefore takes
-  // priority over error while the spinner is ticking. This prevents a benign
-  // `fatal:`/`Error:` line in a git/grep result from killing a live iteration.
+  // failure-looking text in the scrollback is TOOL OUTPUT, not a terminal REPL
+  // failure (a real API/limit error halts the spinner). Working therefore takes
+  // priority while the spinner is ticking. This prevents benign tool/page text
+  // from killing a live iteration.
   const working = anyMatch(WORKING_PATTERNS, text);
-  if (!working && anyMatch(ERROR_PATTERNS, text)) return "error";
   if (working) return "working";
+  if (describeLimit(text) !== null) return "limit";
+  if (anyMatch(ERROR_PATTERNS, text)) return "error";
   // Idle requires the input prompt char `❯` AND a settled-state marker (the
   // status footer with "N tokens" or the bypass-permissions mode line). The
   // box rule alone is insufficient — it also frames the trust dialog, which is
